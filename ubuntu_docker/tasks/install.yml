@@ -1,45 +1,92 @@
----
-- name: Creating a directory for Dockerfile
+
+- name: Uninstall old Docker versions
+  apt:
+    name:
+      - docker
+      - docker-engine
+      - docker.io
+      - containerd
+      - runc
+    state: absent
+
+- name: Creating a directory for packages
   file:
-    path: /home/qabrevilla/docker_config
+    path: /home/userver/docker-deb
     state: directory
 
-- name: Copying the Dockerfile
-  copy:
-    src: Dockerfile
-    dest: /home/qabrevilla/docker_config
-    owner: qabrevilla
-    group: qabrevilla
+- name: Downloading docker components
+  get_url:
+    url: "https://download.docker.com/linux/ubuntu/dists/jammy/pool/stable/amd64/{{ item }}"
+    dest: /home/userver/docker-deb
+  with_items:
+    - "{{ docker_apps.containerd }}.deb"
+    - "{{ docker_apps.docker_ce_cli }}.deb"
+    - "{{ docker_apps.docker_ce }}.deb"
+    - "{{ docker_apps.docker_compose }}.deb"
 
-- name: Creating volume
-  file:
-    path: /home/qabrevilla/pages
-    state: directory
+- name: Installing docker components
+  shell: |
+    cd /home/userver/docker-deb
+    dpkg -i "{{ item }}"
+  with_items:
+    - "{{ docker_apps.containerd }}.deb"
+    - "{{ docker_apps.docker_ce_cli }}.deb"
+    - "{{ docker_apps.docker_ce }}.deb"
+    - "{{ docker_apps.docker_compose }}.deb"
 
-- name: Building image
-  community.docker.docker_image:
-    name: lamp-userver
-    tag: 1.0
-    build:
-      path: /home/qabrevilla/docker_config
-    source: build
+- name: Fixing /var/run/docker.sock error
+  shell: chmod 666 /var/run/docker.sock
 
-- name: Deploying container
-  community.docker.docker_container:
-    name: lamp-userver
-    image: lamp-userver:1.0
+- name: Ensure group docker exists
+  group:
+    name: docker
+    state: present
+
+- name: Adding docker to the group of the current user
+  user:
+    name: userver
+    groups: docker
+    append: yes
+
+- name: Start docker services
+  service:
+    name: "{{ item }}"
     state: started
-    exposed_ports:
-      - "80"
-    ports:
-      - "8080:80"
-    volumes:
-      - /home/qabrevilla/pages:/var/www/html
+  with_items:
+    - docker
+    - containerd
+
+- name: Install python
+  apt:
+    name: python3-pip
+
+- name: Install python sdk
+  become_user: "{{ ansible_env.SUDO_USER }}"
+  pip:
+    name:
+      - docker
+      - docker-compose
 
 - block:
-  - name: Verify if lamp-userver container is running
-    shell: docker ps
-    register: container_status
+  - name: Verifying docker service
+    shell: systemctl list-unit-files | grep docker
+    register: docker_service
 
   - debug:
-      msg="{{ container_status }}"
+      msg="{{ docker_service }}"
+
+- block:
+  - name: Verifying user groups
+    shell: groups userver
+    register: user_groups
+
+  - debug:
+      msg="{{ user_groups }}"
+
+- block:
+  - name: Verifying docker installation
+    shell: docker --version
+    register: docker_installation
+
+  - debug:
+      msg="{{ docker_installation }}"
